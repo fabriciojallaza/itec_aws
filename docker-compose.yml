@@ -1,8 +1,8 @@
 version: '2'
 services:
   itec_aws_backend:
-    env_file:
-      - dev.env
+    # env_file:
+    #   - prod.env
     build:
       context: .
     ports:
