@@ -1,3 +1,3 @@
 # shellcheck disable=SC2046
-export $(xargs < dev.env) && python manage.py collectstatic --noinput
+export $(xargs < prod.env) && python manage.py collectstatic --noinput
 
