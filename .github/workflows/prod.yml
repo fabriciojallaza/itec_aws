@@ -1,0 +1,103 @@
+name: Deploy to Prod Env
+
+on:
+  push:
+    branches:
+      - prod
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPO: itec-backend
+  APPNAME: itec-prod-backend
+
+jobs:
+  test-build-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to AWS ECR
+      uses: aws-actions/amazon-ecr-login@v1
+      with:
+        registry: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+
+    # - name: Generate .env file
+    #   run: |
+    #     echo "DB_NAME=${{ secrets.DB_NAME_PROD }}" > prod.env
+
+    - name: Build Docker image
+      run: |
+        docker build -t ${{ env.ECR_REPO }}:latest -f Dockerfile.prod .
+        docker tag ${{ env.ECR_REPO }}:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:latest
+        docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:latest
+
+  deploy:
+    needs: test-build-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to AWS ECR
+      uses: aws-actions/amazon-ecr-login@v1
+      with:
+        registry: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+
+    - name: Download task definition
+      run: |
+        aws ecs describe-task-definition --task-definition $APPNAME --query taskDefinition > task-definition.json
+    - name: Fill in the new image ID in the Amazon ECS task definition
+      id: task-def
+      uses: aws-actions/amazon-ecs-render-task-definition@v1
+      with:
+        task-definition: task-definition.json
+        container-name: ${{ env.APPNAME }}
+        image: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}
+    - name: Check task definition
+      run: |
+        cat task-definition.json
+    - name: Deploy to ECS
+      uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+      with:
+        task-definition: ${{ steps.task-def.outputs.task-definition }}
+        service: ${{ env.APPNAME }}
+        cluster: ${{ env.APPNAME }}
+        wait-for-service-stability: true
+
+    - name: ECR Image Cleanup
+      run: |
+        # Get the image digests and pushed timestamps from ECR
+        images=$(aws ecr list-images --region ${{ env.AWS_REGION }} --repository-name ${{ env.ECR_REPO }} --query 'imageIds[*].{Digest:imageDigest,PushedAt:imagePushedAt}' --output json)
+
+        # Sort the images by pushed timestamp in descending order
+        sorted_images=$(echo "$images" | jq -r 'sort_by(.PushedAt) | reverse | .[] | .Digest')
+
+        # Determine the number of images to delete (keep only the first 3)
+        num_images=$(echo "$sorted_images" | wc -l)
+
+        # Delete images only if there are more than 3
+        if [ "$num_images" -gt 3 ]; then
+            images_to_delete=$(echo "$sorted_images" | sed -n '4,$ p')
+            for image_digest in $images_to_delete; do
+                aws ecr batch-delete-image --region $AWS_REGION --repository-name $ECR_REPOSITORY --image-ids imageDigest=$image_digest
+            done
+            echo "Deleted old images from ECR repository."
+        else
+            echo "No need to delete images. There are less than 4 images in the ECR repository."
+        fi
