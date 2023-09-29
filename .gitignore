@@ -1,0 +1,17 @@
+dev.env
+/dev.env
+.vscode/
+__pycache__/
+example.ipynb
+/venv/
+/terraform/prod/.terraform/
+/terraform/prod/*.tfstate
+/terraform/prod/*.tfstate.*
+
+.idea/
+/mediafiles/*
+
+/terraform/prod/.terraform/*
+prod.env
+dev.env
+

@@ -1,0 +1,9 @@
+version: '2'
+services:
+  itec_aws_backend:
+    env_file:
+      - dev.env
+    build:
+      context: .
+    ports:
+      - "8000:8000"
